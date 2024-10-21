@@ -1,4 +1,6 @@
-﻿namespace Krafter;
+﻿using System.Text.Json.Serialization;
+
+namespace Krafter;
 
 public class Program
 {
@@ -14,7 +16,8 @@ public class Program
 
             var entityPath = args[0];
 
-            _ = new Krafter(entityPath);
+            var krafter = new Krafter(entityPath);
+            krafter.EntityContextGenerator();
         }
         catch (Exception e)
         {

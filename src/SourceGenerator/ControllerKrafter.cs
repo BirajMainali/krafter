@@ -106,6 +106,11 @@ public class ControllerKrafter : IKrafter
                                     }
                                 """;
 
+        if (!Directory.Exists(outputPath))
+        {
+            Directory.CreateDirectory(outputPath);
+        }
+
         var controllerPath = Path.Combine(outputPath, $"{className}Controller.cs");
         File.WriteAllText(controllerPath, controllerClass);
 

@@ -30,6 +30,10 @@ public class DtoKrafter : IKrafter
                                   }
 
                                   """;
+            if (!Directory.Exists(outputPath))
+            {
+                Directory.CreateDirectory(outputPath);
+            }
             var outputFilePath = Path.Combine(outputPath, $"{className}.cs");
             File.WriteAllText(outputFilePath, classTemplate);
             Console.WriteLine($"Generated {outputFilePath}");

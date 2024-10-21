@@ -1,6 +1,7 @@
-﻿using System.Reflection;
-using Krafter.Factory;
+﻿using Krafter.Factory;
 using Krafter.Types;
+using Microsoft.CodeAnalysis.CSharp;
+using Microsoft.CodeAnalysis.CSharp.Syntax;
 
 namespace Krafter;
 
@@ -13,23 +14,19 @@ public class Krafter(string entityPath)
             Console.WriteLine("Starting Krafter...");
             var maps = new Dictionary<KrafterAttributeType, List<KrafterProperty>>();
             var entityName = GetEntityName();
-            var entityType = GetEntityType(entityName);
+            var krafterPropertyInfos = GetEntityType();
             Console.WriteLine("Generating source code for entity: " + entityName);
+            krafterPropertyInfos.ForEach(krafterPropertyInfo => PrintProperty(krafterPropertyInfo.Property));
 
-            var properties = entityType.GetProperties().ToList();
-            properties.ForEach(PrintProperty);
-
-            foreach (var propertyInfo in properties)
+            foreach (var propertyInfo in krafterPropertyInfos)
             {
-                var krafterAttribute = propertyInfo.GetCustomAttribute<KrafterAttribute>();
-                if (krafterAttribute is null) continue;
-                AddPropertyToMap(maps, krafterAttribute.IncludeInInsert, propertyInfo, KrafterAttributeType.Insert);
-                AddPropertyToMap(maps, krafterAttribute.IncludeInUpdate, propertyInfo, KrafterAttributeType.Update);
-                AddPropertyToMap(maps, krafterAttribute.IncludeInInput, propertyInfo, KrafterAttributeType.Input);
-                AddPropertyToMap(maps, krafterAttribute.IncludeInOutput, propertyInfo, KrafterAttributeType.Output);
+                AddPropertyToMap(maps, propertyInfo.IncludeInInsert, propertyInfo.Property, KrafterAttributeType.Insert);
+                AddPropertyToMap(maps, propertyInfo.IncludeInUpdate, propertyInfo.Property, KrafterAttributeType.Update);
+                AddPropertyToMap(maps, propertyInfo.IncludeInInput, propertyInfo.Property, KrafterAttributeType.Input);
+                AddPropertyToMap(maps, propertyInfo.IncludeInOutput, propertyInfo.Property, KrafterAttributeType.Output);
             }
 
-            GenerateSource(maps, entityName, "/output");
+            GenerateSource(maps, entityName, "C:\\Experimental\\PolySoundex\\Krafter\\example\\output");
             Console.WriteLine("Krafter has finished generating source code for entity: " + entityName);
         }
         catch (Exception e)
@@ -42,30 +39,99 @@ public class Krafter(string entityPath)
         }
     }
 
-    private Type GetEntityType(string entityName)
+    private List<KrafterPropertyInfo> GetEntityType()
     {
-        var assembly = Assembly.GetExecutingAssembly();
-        var entityType = assembly.GetType(entityName);
-        if (entityType is null)
-            throw new Exception("Krafter could not find the entity type in the assembly, Path: " + entityPath);
+        if (string.IsNullOrWhiteSpace(entityPath) || !File.Exists(entityPath))
+        {
+            throw new ArgumentException("The provided entity path is invalid or does not exist.", nameof(entityPath));
+        }
 
-        return entityType;
+
+        var code = File.ReadAllText(entityPath);
+        var syntaxTree = CSharpSyntaxTree.ParseText(code);
+        var classDeclarations = syntaxTree.GetRoot().DescendantNodes().OfType<ClassDeclarationSyntax>().ToList();
+        var classDeclaration = classDeclarations.FirstOrDefault();
+        if (classDeclaration == null)
+        {
+            throw new InvalidOperationException("No class found in the provided C# file.");
+        }
+
+
+        var propertiesInfo = new List<KrafterPropertyInfo>();
+        var properties = classDeclaration.Members.OfType<PropertyDeclarationSyntax>();
+        foreach (var property in properties)
+
+        {
+            var propertyName = property.Identifier.Text;
+            var propertyType = property.Type.ToString();
+            var attributeSyntax = property.AttributeLists
+                .SelectMany(attrList => attrList.Attributes)
+                .FirstOrDefault(attr => attr.Name.ToString() == "Krafter");
+
+            if (attributeSyntax == null) continue;
+            var includeInInsert = false;
+            var includeInUpdate = false;
+            var includeInInput = false;
+            var includeInOutput = false;
+
+
+            if (attributeSyntax.ArgumentList == null) continue;
+            var arguments = attributeSyntax.ArgumentList.Arguments;
+            if (arguments is [_, ..])
+            {
+                includeInInsert = EvaluateArgument(arguments[0]);
+            }
+
+            if (arguments is [_, _, ..])
+            {
+                includeInUpdate = EvaluateArgument(arguments[1]);
+            }
+
+            if (arguments is [_, _, _, ..])
+            {
+                includeInInput = EvaluateArgument(arguments[2]);
+            }
+
+            if (arguments is [_, _, _, _, ..])
+            {
+                includeInOutput = EvaluateArgument(arguments[3]);
+            }
+
+
+            propertiesInfo.Add(new KrafterPropertyInfo
+            {
+                Property = new KrafterProperty(propertyType, propertyName),
+                IncludeInInsert = includeInInsert,
+                IncludeInUpdate = includeInUpdate,
+                IncludeInInput = includeInInput,
+                IncludeInOutput = includeInOutput
+            });
+        }
+
+        return propertiesInfo;
+    }
+
+    private bool EvaluateArgument(AttributeArgumentSyntax argument)
+    {
+        if (argument.Expression is LiteralExpressionSyntax literal)
+
+        {
+            return literal.Token.Value is true;
+        }
+
+        return false;
     }
 
     private void AddPropertyToMap(Dictionary<KrafterAttributeType, List<KrafterProperty>> maps, bool include,
-        PropertyInfo propertyInfo, KrafterAttributeType attributeType)
+        KrafterProperty propertyInfo, KrafterAttributeType attributeType)
     {
         if (!include) return;
-
         Console.WriteLine($"Property {propertyInfo.Name} is included in {attributeType.ToString().ToLower()}");
-
         if (!maps.ContainsKey(attributeType)) maps[attributeType] = new List<KrafterProperty>();
-
-        maps[attributeType].Add(new KrafterProperty(propertyInfo.PropertyType.Name, propertyInfo.Name));
+        maps[attributeType].Add(new KrafterProperty(propertyInfo.Type, propertyInfo.Name));
     }
 
-    private void GenerateSource(Dictionary<KrafterAttributeType, List<KrafterProperty>> maps, string entityName,
-        string outputPath)
+    private void GenerateSource(Dictionary<KrafterAttributeType, List<KrafterProperty>> maps, string entityName, string outputPath)
     {
         var dtoFactory = KrafterFactory.CreateKrafter(KrafterType.Dto);
         dtoFactory.Generate(maps.ToDictionary(k => k.Key, v => v.Value.ToArray()), entityName, outputPath);
@@ -82,10 +148,18 @@ public class Krafter(string entityPath)
         return Path.GetFileNameWithoutExtension(entityPath);
     }
 
-    private void PrintProperty(PropertyInfo propertyInfo)
+    private void PrintProperty(KrafterProperty propertyInfo)
     {
         Console.WriteLine($"Property Name: {propertyInfo.Name}");
-        Console.WriteLine($"Property Type: {propertyInfo.PropertyType.Name}");
-        Console.WriteLine($"Property Value: {propertyInfo.GetValue(propertyInfo)}");
+        Console.WriteLine($"Property Type: {propertyInfo.Name}");
     }
+}
+
+public class KrafterPropertyInfo
+{
+    public KrafterProperty Property { get; set; }
+    public bool IncludeInInsert { get; set; }
+    public bool IncludeInUpdate { get; set; }
+    public bool IncludeInInput { get; set; }
+    public bool IncludeInOutput { get; set; }
 }
