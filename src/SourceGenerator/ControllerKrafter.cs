@@ -1,18 +1,16 @@
-﻿using Krafter.Interfaces;
-using Krafter.Types;
+﻿using Krafter.Extensions;
+using Krafter.Interfaces;
 
 namespace Krafter.SourceGenerator;
 
 public class ControllerKrafter : IKrafter
 {
-    private static readonly string[] SupportedMethod = { "Create", "Update", "Delete", "GetById", "GetAll" };
+    private static readonly string[] SupportedMethod = { "Create", "Update", "Delete" };
 
-    public void Generate(Dictionary<KrafterAttributeType, KrafterProperty[]> properties, string identifier,
-        string outputPath)
+    public void Generate(List<KrafterProperty> properties, string entity, string outputPath)
     {
-        var className = identifier;
-        var interfaceName = $"I{className}Service";
-        var serviceName = $"{className}Service";
+        var interfaceName = $"I{entity}Service";
+        var serviceName = $"{entity}Service";
 
         var controllerMethods = new List<string>();
 
@@ -20,63 +18,108 @@ public class ControllerKrafter : IKrafter
         {
             var methodImplementation = method switch
             {
+                "Index" => $$"""
+                              public async Task<IActionResult> Index()
+                              {
+                                    return View();
+                              }
+                             """,
+
                 "Create" => $$"""
-                                  [HttpPost]
-                                  public async Task<IActionResult> Create([FromBody] {{className}}Dto dto)
+                              public async Task<IActionResult> Create()
+                              {
+                                  var vm = new {{entity.GetVmName()}}(); 
+                                  return View(vm);
+                              }
+
+                              [HttpPost]
+                              public async Task<IActionResult> Create({{entity.GetVmName()}} vm)
+                              {
+                                  if (!ModelState.IsValid)
                                   {
-                                      if (!ModelState.IsValid)
+                                      return View(vm); 
+                                  }
+                              
+                                  try
+                                  {
+                                      var dto = new {{entity.GetDtoName()}}
                                       {
-                                        return BadRequest(ModelState);
-                                      }
+                                          {{ToDto(properties)}}
+                                      };
                               
                                       var createdEntity = await _{{serviceName}}.CreateAsync(dto);
-                                      return CreatedAtAction(nameof(GetById), new { id = createdEntity.Id }, createdEntity);
+                                      return RedirectToAction(nameof(Index));
                                   }
-                              """,
-                "Update" => $$"""
-                                  [HttpPut("{id}")]
-                                  public async Task<IActionResult> Update(int id, [FromBody] {{className}}UpdateDto updateDto)
+                                  catch (Exception ex)
                                   {
-                                      if (id != updateDto.Id || !ModelState.IsValid)
-                                        {
-                                            return BadRequest(ModelState);
-                                        }
-                              
-                                      var updatedEntity = await _{{serviceName}}.UpdateAsync(id, updateDto);
-                                      return Ok(updatedEntity);
+                                      _logger.LogError(ex, "An error occurred while creating {{entity}}");
+                                      return RedirectToAction(nameof(Index)); // Optional: return to Create with error message
                                   }
+                              }
                               """,
+
+                "Update" => $$"""
+                              public async Task<IActionResult> Update(int id)
+                              {
+                                  var dto = await _{{serviceName}}.GetByIdAsync(id);
+                                  if (dto == null)
+                                  {
+                                      _logger.LogWarning("Entity with ID {id} not found for Update", id);
+                                      return RedirectToAction(nameof(Index));
+                                  }
+                              
+                                  var vm = new {{entity.GetVmName()}}
+                                  {
+                                      {{ToVm(properties)}}
+                                  };
+                              
+                                  return View(vm);
+                              }
+
+                              [HttpPost]
+                              public async Task<IActionResult> Update(int id, {{entity.GetVmName()}} vm)
+                              {
+                                  if (id != vm.Id || !ModelState.IsValid)
+                                  {
+                                      _logger.LogWarning("Invalid model state or ID mismatch for Update method");
+                                      return View(vm); 
+                                  }
+                              
+                                  try
+                                  {
+                                      var dto = new {{entity.GetDtoName()}}
+                                      {
+                                          {{ToDto(properties)}}
+                                      };
+                              
+                                      var updatedEntity = await _{{serviceName}}.UpdateAsync(id, dto);
+                                      return RedirectToAction(nameof(Index));
+                                  }
+                                  catch (Exception ex)
+                                  {
+                                      _logger.LogError(ex, "An error occurred while updating {{entity}} with ID {id}", id);
+                                      return RedirectToAction(nameof(Index));
+                                  }
+                              }
+                              """,
+
                 "Delete" => $$"""
-                                  [HttpDelete("{id}")]
-                                  public async Task<IActionResult> Delete(int id)
+                              [HttpPost]
+                              public async Task<IActionResult> Delete(int id)
+                              {
+                                  try
                                   {
                                       await _{{serviceName}}.DeleteAsync(id);
-                                      {
-                                        return NoContent();
-                                      }
+                                      return RedirectToAction(nameof(Index));
                                   }
-                              """,
-                "GetById" => $$"""
-                                   [HttpGet("{id}")]
-                                   public async Task<IActionResult> GetById(int id)
-                                   {
-                                       var entity = await _{{serviceName}}.GetByIdAsync(id);
-                                       if (entity == null)
-                                       {
-                                        return BadRequest(ModelState);
-                                       }
-                               
-                                       return Ok(entity);
-                                   }
-                               """,
-                "GetAll" => $$"""
-                                  [HttpGet]
-                                  public async Task<IActionResult> GetAll()
+                                  catch (Exception ex)
                                   {
-                                      var entities = await _{{serviceName}}.GetAllAsync();
-                                      return Ok(entities);
+                                      _logger.LogError(ex, "An error occurred while deleting {{entity}} with ID {id}", id);
+                                      return RedirectToAction(nameof(Index));
                                   }
+                              }
                               """,
+
                 _ => throw new NotImplementedException($"Method {method} not implemented.")
             };
 
@@ -85,20 +128,20 @@ public class ControllerKrafter : IKrafter
 
         var controllerClass = $$"""
                                     using Microsoft.AspNetCore.Mvc;
-                                    using System.Collections.Generic;
                                     using System.Threading.Tasks;
+                                    using Microsoft.Extensions.Logging;
                                 
                                     namespace Controllers
                                     {
-                                        [Route("[controller]")]
-                                        [ApiController]
-                                        public class {{className}}Controller : ControllerBase
+                                        public class {{entity.GetControllerName()}} : Controller
                                         {
                                             private readonly {{interfaceName}} _{{serviceName}};
+                                            private readonly ILogger<{{entity}}Controller> _logger;
                                 
-                                            public {{className}}Controller({{interfaceName}} {{serviceName}})
+                                            public {{entity.GetControllerName()}}({{interfaceName}} {{serviceName}}, ILogger<{{entity.GetControllerName()}}> logger)
                                             {
                                                 _{{serviceName}} = {{serviceName}};
+                                                _logger = logger;
                                             }
                                 
                                             {{string.Join(Environment.NewLine, controllerMethods)}}
@@ -111,9 +154,19 @@ public class ControllerKrafter : IKrafter
             Directory.CreateDirectory(outputPath);
         }
 
-        var controllerPath = Path.Combine(outputPath, $"{className}Controller.cs");
+        var controllerPath = Path.Combine(outputPath, $"{entity}Controller.cs");
         File.WriteAllText(controllerPath, controllerClass);
 
-        Console.WriteLine($"Generated {className}Controller at {controllerPath}");
+        Console.WriteLine($"Generated {entity}Controller at {controllerPath}");
+    }
+
+    private string ToDto(List<KrafterProperty> properties)
+    {
+        return string.Join(Environment.NewLine, properties.Select(p => $"{p.Name} = vm.{p.Name},"));
+    }
+
+    private string ToVm(List<KrafterProperty> properties)
+    {
+        return string.Join(Environment.NewLine, properties.Select(p => $"{p.Name} = dto.{p.Name},"));
     }
 }

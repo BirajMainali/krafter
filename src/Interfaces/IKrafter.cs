@@ -4,5 +4,5 @@ namespace Krafter.Interfaces;
 
 public interface IKrafter
 {
-    void Generate(Dictionary<KrafterAttributeType, KrafterProperty[]> properties, string identifier, string outputPath);
+    void Generate(List<KrafterProperty> properties, string entity, string outputPath);
 }

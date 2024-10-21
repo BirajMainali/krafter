@@ -1,40 +1,37 @@
 ﻿using Krafter.Extensions;
 using Krafter.Interfaces;
-using Krafter.Types;
 
 namespace Krafter.SourceGenerator;
 
 public class DtoKrafter : IKrafter
 {
-    public void Generate(Dictionary<KrafterAttributeType, KrafterProperty[]> properties, string identifier,
-        string outputPath)
+    public void Generate(List<KrafterProperty> properties, string entity, string outputPath)
     {
-        foreach (var propertiesMap in properties)
-        {
-            if (!propertiesMap.Value.Any()) continue;
-            var className = string.Concat(identifier, propertiesMap.Key.GetClassPrefix());
-            var classProperties = propertiesMap.Value.Select(p => $"public {p.Type} {p.Name} {{ get; set; }}");
-            var classContent = string.Join(Environment.NewLine, classProperties);
+        var types = new List<string>() { entity.GetVmName(), entity.GetDtoName() };
 
+        foreach (var type in types)
+        {
+            var classProperties = properties.Select(p => $"public {p.Type} {p.Name} {{ get; set; }}");
+            var classContent = string.Join(Environment.NewLine, classProperties);
 
             var classTemplate = $$"""
 
                                   using System;
 
-                                  namespace Krafter.{{propertiesMap.Key}}
+                                  namespace Krafter.{{type}}
                                   {
-                                      public class {{className}}
+                                      public class {{type}}Dto
                                       {
                                           {{classContent}}
                                       }
                                   }
-
                                   """;
             if (!Directory.Exists(outputPath))
             {
                 Directory.CreateDirectory(outputPath);
             }
-            var outputFilePath = Path.Combine(outputPath, $"{className}.cs");
+
+            var outputFilePath = Path.Combine(outputPath, $"{type}.cs");
             File.WriteAllText(outputFilePath, classTemplate);
             Console.WriteLine($"Generated {outputFilePath}");
         }

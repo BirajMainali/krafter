@@ -1,12 +1,14 @@
-﻿namespace Krafter.example;
+﻿using Krafter.Attributes;
+
+namespace Krafter.example;
 
 public class Product
 {
     public int Id { get; set; }
     
-    [Krafter(true, true, true, true)]
+    [Krafter()]
     public string Name { get; set; }
     
-    [Krafter(true, true, true, true)]
+    [Krafter()]
     public decimal Price { get; set; }
 }

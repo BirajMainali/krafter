@@ -1,6 +1,5 @@
 ﻿using Krafter.Extensions;
 using Krafter.Interfaces;
-using Krafter.Types;
 
 namespace Krafter.SourceGenerator;
 
@@ -8,19 +7,18 @@ public class ServiceKrafter : IKrafter
 {
     private static readonly List<string> MethodNames = ["CreateAsync", "UpdateAsync", "DeleteAsync"];
 
-    public void Generate(Dictionary<KrafterAttributeType, KrafterProperty[]> properties, string identifier,
-        string outputPath)
+    public void Generate(List<KrafterProperty> properties, string entity, string outputPath)
     {
-        var interfaceContent = GenerateInterface(identifier);
-        var serviceContent = GenerateService(identifier, properties);
+        var interfaceContent = GenerateInterface(entity);
+        var serviceContent = GenerateService(entity, properties);
 
         if (!Directory.Exists(outputPath))
         {
             Directory.CreateDirectory(outputPath);
         }
 
-        var interfacePath = Path.Combine(outputPath, $"{GetInterfaceName(identifier)}.cs");
-        var servicePath = Path.Combine(outputPath, $"{GetClassName(identifier)}.cs");
+        var interfacePath = Path.Combine(outputPath, $"{entity.GetInterfaceName()}.cs");
+        var servicePath = Path.Combine(outputPath, $"{entity.GetServiceName()}.cs");
 
         File.WriteAllText(interfacePath, interfaceContent);
         File.WriteAllText(servicePath, serviceContent);
@@ -28,26 +26,17 @@ public class ServiceKrafter : IKrafter
         Console.WriteLine("Service successfully generated");
     }
 
-    private static string GetClassName(string identifier)
-    {
-        return string.Concat(identifier, "Service");
-    }
 
-    private string GetInterfaceName(string identifier)
+    private string GenerateInterface(string entity)
     {
-        return string.Concat("I", identifier, "Service");
-    }
-
-    private string GenerateInterface(string identifier)
-    {
-        var classInstanceName = identifier;
+        var classInstanceName = entity.ToInstanceName();
 
         var methodDeclarations = MethodNames.Select(method => method switch
             {
-                "CreateAsync" => $"Task<{identifier}> {method}({string.Concat(identifier, "Dto")} dto);",
+                "CreateAsync" => $"Task<{entity}> {method}({entity.GetDtoName()} dto);",
                 "UpdateAsync" =>
-                    $"Task<{identifier}> {method}({identifier} {classInstanceName}, {string.Concat(classInstanceName, "UpdateDto")} updateDto);",
-                "DeleteAsync" => $"Task {method}({identifier} {classInstanceName});",
+                    $"Task<{entity}> {method}({entity} {classInstanceName}, {entity.GetDtoName()} dto);",
+                "DeleteAsync" => $"Task {method}({entity} {classInstanceName});",
                 _ => throw new Exception(
                     "Krafter cannot generate service interface method declaration for the provided method name => " +
                     method)
@@ -60,7 +49,7 @@ public class ServiceKrafter : IKrafter
 
                  namespace Services
                  {
-                     public interface {{GetInterfaceName(identifier)}}
+                     public interface {{entity.GetInterfaceName()}}
                      {
                          {{string.Join(Environment.NewLine, methodDeclarations)}}
                      }
@@ -68,26 +57,22 @@ public class ServiceKrafter : IKrafter
                  """;
     }
 
-    private string GenerateService(string entity, Dictionary<KrafterAttributeType, KrafterProperty[]> properties)
+    private string GenerateService(string entity, List<KrafterProperty> properties)
     {
-        var classInstanceName = entity.FirstLetterToLower();
-
-        var insertProperties = properties.GetInsertProperties();
-        var updateProperties = properties.GetUpdateProperties();
-
+        var classInstanceName = entity.ToInstanceName();
         var repoInstanceName = classInstanceName + "Repository";
         var uowInstanceName = "unitOfWorkManager";
 
-        var methodImplementations = MethodNames.Select(method => method switch
+        var methodImplementations = MethodNames.Select(methodName => methodName switch
             {
                 "CreateAsync" => $$"""
-                                       public async Task<{{entity}}> {{method}}({{string.Concat(entity, "Dto")}} dto)
+                                       public async Task<{{entity}}> {{methodName}}({{entity.GetDtoName()}} dto)
                                        {
                                            using (var scope = new TransactionScope(TransactionScopeAsyncFlowOption.Enabled))
                                            {
                                                var entity = new {{entity}} 
                                                {
-                                                   {{string.Join(", ", insertProperties.Select(p => $"{p.Name} = dto.{p.Name}"))}}
+                                                   {{string.Join(", ", properties.Select(p => $"{p.Name} = dto.{p.Name}"))}}
                                                };
                                    
                                                await _unitOfWorkManager.AddAsync(entity);
@@ -98,11 +83,11 @@ public class ServiceKrafter : IKrafter
                                        }
                                    """,
                 "UpdateAsync" => $$"""
-                                       public async Task<{{entity}}> {{method}}({{entity}} {{classInstanceName}}, {{string.Concat(entity, "UpdateDto")}} updateDto)
+                                       public async Task<{{entity}}> {{methodName}}({{entity}} {{classInstanceName}}, {{entity.GetDtoName()}} dto)
                                        {
                                            using (var scope = new TransactionScope(TransactionScopeAsyncFlowOption.Enabled))
                                            {
-                                               {{string.Join(Environment.NewLine, updateProperties.Select(p => $"{classInstanceName}.{p.Name} = updateDto.{p.Name};"))}}
+                                               {{string.Join(Environment.NewLine, properties.Select(p => $"{classInstanceName}.{p.Name} = dto.{p.Name};"))}}
                                    
                                                await _unitOfWorkManager.UpdateAsync({{classInstanceName}});
                                                await _unitOfWorkManager.SaveChangesAsync();
@@ -112,7 +97,7 @@ public class ServiceKrafter : IKrafter
                                        }
                                    """,
                 "DeleteAsync" => $$"""
-                                       public async Task {{method}}({{entity}} {{classInstanceName}})
+                                       public async Task {{methodName}}({{entity}} {{classInstanceName}})
                                        {
                                            using (var scope = new TransactionScope(TransactionScopeAsyncFlowOption.Enabled))
                                            {
@@ -123,7 +108,8 @@ public class ServiceKrafter : IKrafter
                                        }
                                    """,
                 _ => throw new Exception(
-                    "Krafter cannot generate service method implementation for the provided method name => " + method)
+                    "Krafter cannot generate service method implementation for the provided method name => " +
+                    methodName)
             })
             .ToList();
 
@@ -133,12 +119,12 @@ public class ServiceKrafter : IKrafter
                  
                      namespace Services
                      {
-                         public class {{GetClassName(entity)}} : {{GetInterfaceName(entity)}}
+                         public class {{entity.GetServiceName()}} : {{entity.GetInterfaceName()}}
                          {
                              private readonly IRepository<{{entity}}> _{{repoInstanceName}};
                              private readonly IUnitOfWorkManager _{{uowInstanceName}};
                  
-                             public {{GetClassName(entity)}}(IRepository<{{entity}}> {{repoInstanceName}}, IUnitOfWorkManager {{uowInstanceName}})
+                             public {{entity.GetServiceName()}}(IRepository<{{entity}}> {{repoInstanceName}}, IUnitOfWorkManager {{uowInstanceName}})
                              {
                                 _{{repoInstanceName}} = {{repoInstanceName}};
                                 _{{uowInstanceName}} = {{uowInstanceName}};
